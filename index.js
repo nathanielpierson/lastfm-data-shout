@@ -69,7 +69,7 @@ client.on('interactionCreate', async (interaction) => {
   try {
     const { artistName, playCount } = await getArtistPlayCount(username, artist);
     await interaction.editReply(
-      `**${username}** has **${playCount.toLocaleString()}** plays for **${artistName}**.`
+      `**${username}** has **${playCount.toLocaleString()}** plays of **${artistName}**.`
     );
   } catch (err) {
     const message = err.response?.data?.message || err.message || 'Something went wrong.';
