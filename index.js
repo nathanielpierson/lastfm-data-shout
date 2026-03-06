@@ -38,6 +38,32 @@ async function getArtistPlayCount(username, artistName) {
   return { artistName: artist.name, playCount: parseInt(userplaycount, 10) };
 }
 
+async function getAlbumPlayCount(username, artistName, albumName) {
+  const { data } = await axios.get(LASTFM_BASE, {
+    params: {
+      method: 'album.getInfo',
+      artist: artistName,
+      album: albumName,
+      username,
+      api_key: LASTFM_API_KEY,
+      format: 'json',
+    },
+  });
+  if (data.error) throw new Error(data.message || `Last.fm API error: ${data.error}`);
+  const album = data.album;
+  if (!album) throw new Error('Album not found.');
+  const userplaycount = album.userplaycount;
+  if (userplaycount === undefined) throw new Error('No play count for this user/album.');
+  const artistField = album.artist;
+  const resolvedArtistName =
+    typeof artistField === 'string' ? artistField : artistField?.name || artistName;
+  return {
+    artistName: resolvedArtistName,
+    albumName: album.name,
+    playCount: parseInt(userplaycount, 10),
+  };
+}
+
 const artistPlaysCommand = new SlashCommandBuilder()
   .setName('artistplays')
   .setDescription("Look up a Last.fm user's play count for an artist")
@@ -49,28 +75,57 @@ const artistPlaysCommand = new SlashCommandBuilder()
   )
   .toJSON();
 
+const albumPlaysCommand = new SlashCommandBuilder()
+  .setName('albumplays')
+  .setDescription("Look up a Last.fm user's play count for an album")
+  .addStringOption((opt) =>
+    opt.setName('username').setDescription('Last.fm username').setRequired(true)
+  )
+  .addStringOption((opt) =>
+    opt.setName('artist').setDescription('Artist name').setRequired(true)
+  )
+  .addStringOption((opt) =>
+    opt.setName('album').setDescription('Album name').setRequired(true)
+  )
+  .toJSON();
+
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   const rest = new REST().setToken(DISCORD_TOKEN);
   await rest.put(Routes.applicationCommands(client.user.id), {
-    body: [artistPlaysCommand],
+    body: [artistPlaysCommand, albumPlaysCommand],
   });
-  console.log('Slash command registered: /artistplays');
+  console.log('Slash commands registered: /artistplays, /albumplays');
 });
 
 client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isChatInputCommand() || interaction.commandName !== 'artistplays') return;
+  if (!interaction.isChatInputCommand()) return;
 
-  const username = interaction.options.getString('username');
-  const artist = interaction.options.getString('artist');
+  const { commandName } = interaction;
 
   await interaction.deferReply();
 
   try {
-    const { artistName, playCount } = await getArtistPlayCount(username, artist);
-    await interaction.editReply(
-      `**${username}** has **${playCount.toLocaleString()}** plays of **${artistName}**.`
-    );
+    if (commandName === 'artistplays') {
+      const username = interaction.options.getString('username');
+      const artist = interaction.options.getString('artist');
+      const { artistName, playCount } = await getArtistPlayCount(username, artist);
+      await interaction.editReply(
+        `**${username}** has **${playCount.toLocaleString()}** plays of **${artistName}**.`
+      );
+    } else if (commandName === 'albumplays') {
+      const username = interaction.options.getString('username');
+      const artist = interaction.options.getString('artist');
+      const album = interaction.options.getString('album');
+      const { artistName, albumName, playCount } = await getAlbumPlayCount(
+        username,
+        artist,
+        album
+      );
+      await interaction.editReply(
+        `**${username}** has **${playCount.toLocaleString()}** plays of songs from the album **${albumName}** by **${artistName}**.`
+      );
+    }
   } catch (err) {
     const message = err.response?.data?.message || err.message || 'Something went wrong.';
     await interaction.editReply(`Couldn't get play count: ${message}`);
