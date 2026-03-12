@@ -38,6 +38,30 @@ async function getArtistPlayCount(username, artistName) {
   return { artistName: artist.name, playCount: parseInt(userplaycount, 10) };
 }
 
+async function getWeeklyArtistPlayCount(username, artistName) {
+  const { data } = await axios.get(LASTFM_BASE, {
+    params: {
+      method: 'user.getTopArtists',
+      user: username,
+      period: '7day',
+      limit: 300,
+      api_key: LASTFM_API_KEY,
+      format: 'json',
+    },
+  });
+  if (data.error) throw new Error(data.message || `Last.fm API error: ${data.error}`);
+  const artists = data.topartists?.artist;
+  if (!artists || !Array.isArray(artists)) return null;
+
+  const target = artists.find(
+    (a) => typeof a.name === 'string' && a.name.toLowerCase() === artistName.toLowerCase()
+  );
+  if (!target) return null;
+
+  const plays = parseInt(target.playcount, 10);
+  return Number.isNaN(plays) ? null : plays;
+}
+
 async function getAlbumPlayCount(username, artistName, albumName) {
   const { data } = await axios.get(LASTFM_BASE, {
     params: {
@@ -110,8 +134,17 @@ client.on('interactionCreate', async (interaction) => {
       const username = interaction.options.getString('username');
       const artist = interaction.options.getString('artist');
       const { artistName, playCount } = await getArtistPlayCount(username, artist);
+      let weeklySuffix = '';
+      try {
+        const weeklyPlays = await getWeeklyArtistPlayCount(username, artistName);
+        if (weeklyPlays != null) {
+          weeklySuffix = ` (+**${weeklyPlays.toLocaleString()}** listens since last week)`;
+        }
+      } catch {
+        // Ignore weekly errors and just send the base message
+      }
       await interaction.editReply(
-        `**${username}** has **${playCount.toLocaleString()}** plays of **${artistName}**.`
+        `**${username}** has **${playCount.toLocaleString()}** plays of **${artistName}**.${weeklySuffix}`
       );
     } else if (commandName === 'albumplays') {
       const username = interaction.options.getString('username');
