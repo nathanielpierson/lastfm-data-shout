@@ -38,6 +38,36 @@ async function getArtistPlayCount(username, artistName) {
   return { artistName: artist.name, playCount: parseInt(userplaycount, 10) };
 }
 
+/** Top albums for this user, filtered to the given artist (by name), in play order (from user.getTopAlbums). */
+async function getTopAlbumsByArtist(username, resolvedArtistName, maxAlbums = 2) {
+  const { data } = await axios.get(LASTFM_BASE, {
+    params: {
+      method: 'user.getTopAlbums',
+      user: username,
+      period: 'overall',
+      limit: 1000,
+      api_key: LASTFM_API_KEY,
+      format: 'json',
+    },
+  });
+  if (data.error) throw new Error(data.message || `Last.fm API error: ${data.error}`);
+  let albums = data.topalbums?.album;
+  if (!albums) return [];
+  if (!Array.isArray(albums)) albums = [albums];
+
+  const target = resolvedArtistName.trim().toLowerCase();
+  const byArtist = albums.filter((album) => {
+    const a = album.artist;
+    const name = typeof a === 'string' ? a : a?.name;
+    return typeof name === 'string' && name.trim().toLowerCase() === target;
+  });
+
+  return byArtist.slice(0, maxAlbums).map((album) => ({
+    albumName: album.name,
+    playCount: parseInt(album.playcount, 10),
+  }));
+}
+
 async function getWeeklyArtistPlayCount(username, artistName) {
   const { data } = await axios.get(LASTFM_BASE, {
     params: {
@@ -99,6 +129,17 @@ const artistPlaysCommand = new SlashCommandBuilder()
   )
   .toJSON();
 
+const artistPlaysBCommand = new SlashCommandBuilder()
+  .setName('artistplaysb')
+  .setDescription("Artist plays plus your top two albums by that artist (overall)")
+  .addStringOption((opt) =>
+    opt.setName('username').setDescription('Last.fm username').setRequired(true)
+  )
+  .addStringOption((opt) =>
+    opt.setName('artist').setDescription('Artist name').setRequired(true)
+  )
+  .toJSON();
+
 const albumPlaysCommand = new SlashCommandBuilder()
   .setName('albumplays')
   .setDescription("Look up a Last.fm user's play count for an album")
@@ -117,9 +158,9 @@ client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   const rest = new REST().setToken(DISCORD_TOKEN);
   await rest.put(Routes.applicationCommands(client.user.id), {
-    body: [artistPlaysCommand, albumPlaysCommand],
+    body: [artistPlaysCommand, artistPlaysBCommand, albumPlaysCommand],
   });
-  console.log('Slash commands registered: /artistplays, /albumplays');
+  console.log('Slash commands registered: /artistplays, /artistplaysb, /albumplays');
 });
 
 client.on('interactionCreate', async (interaction) => {
@@ -143,8 +184,34 @@ client.on('interactionCreate', async (interaction) => {
       } catch {
         // Ignore weekly errors and just send the base message
       }
+      const eminemSuffix =
+        artistName.trim().toLowerCase() === 'eminem'
+          ? " Aren't you a little bit too old to be listening to Eminem?"
+          : '';
       await interaction.editReply(
-        `**${username}** has **${playCount.toLocaleString()}** plays of **${artistName}**.${weeklySuffix}`
+        `**${username}** has **${playCount.toLocaleString()}** plays of **${artistName}**.${weeklySuffix}${eminemSuffix}`
+      );
+    } else if (commandName === 'artistplaysb') {
+      const username = interaction.options.getString('username');
+      const artist = interaction.options.getString('artist');
+      const { artistName, playCount } = await getArtistPlayCount(username, artist);
+      let topAlbumsText = '';
+      try {
+        const topAlbums = await getTopAlbumsByArtist(username, artistName, 2);
+        if (topAlbums.length > 0) {
+          const lines = topAlbums.map(
+            (a, i) =>
+              `${i + 1}. **${a.albumName}** with **${a.playCount.toLocaleString()}** plays`
+          );
+          topAlbumsText = `\n\n**${username}**'s top albums in **${artistName}**:\n${lines.join(
+            '\n'
+          )}`;
+        }
+      } catch {
+        // omit top-albums block on error
+      }
+      await interaction.editReply(
+        `**${username}** has **${playCount.toLocaleString()}** plays of **${artistName}**.${topAlbumsText}`
       );
     } else if (commandName === 'albumplays') {
       const username = interaction.options.getString('username');
