@@ -39,7 +39,7 @@ async function getArtistPlayCount(username, artistName) {
 }
 
 /** Top albums for this user, filtered to the given artist (by name), in play order (from user.getTopAlbums). */
-async function getTopAlbumsByArtist(username, resolvedArtistName, maxAlbums = 2) {
+async function getTopAlbumsByArtist(username, resolvedArtistName, maxAlbums = 3) {
   const { data } = await axios.get(LASTFM_BASE, {
     params: {
       method: 'user.getTopAlbums',
@@ -131,7 +131,7 @@ const artistPlaysCommand = new SlashCommandBuilder()
 
 const artistPlaysBCommand = new SlashCommandBuilder()
   .setName('artistplaysb')
-  .setDescription("Artist plays plus your top two albums by that artist (overall)")
+  .setDescription("Artist plays plus up to 3 top albums by that artist (from top 1000 overall)")
   .addStringOption((opt) =>
     opt.setName('username').setDescription('Last.fm username').setRequired(true)
   )
@@ -197,7 +197,7 @@ client.on('interactionCreate', async (interaction) => {
       const { artistName, playCount } = await getArtistPlayCount(username, artist);
       let topAlbumsText = '';
       try {
-        const topAlbums = await getTopAlbumsByArtist(username, artistName, 2);
+        const topAlbums = await getTopAlbumsByArtist(username, artistName, 3);
         if (topAlbums.length > 0) {
           const lines = topAlbums.map(
             (a, i) =>
