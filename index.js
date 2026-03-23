@@ -1,65 +1,97 @@
-require('dotenv').config();
+require("dotenv").config();
 
-const { Client, GatewayIntentBits, SlashCommandBuilder, REST, Routes } = require('discord.js');
-const axios = require('axios');
+const {
+  Client,
+  GatewayIntentBits,
+  SlashCommandBuilder,
+  REST,
+  Routes,
+} = require("discord.js");
+const axios = require("axios");
 
 const LASTFM_API_KEY = process.env.LASTFM_API_KEY;
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 
 if (!LASTFM_API_KEY) {
-  console.error('Missing LASTFM_API_KEY in .env');
+  console.error("Missing LASTFM_API_KEY in .env");
   process.exit(1);
 }
 
 if (!DISCORD_TOKEN) {
-  console.error('Missing DISCORD_TOKEN in .env');
+  console.error("Missing DISCORD_TOKEN in .env");
   process.exit(1);
 }
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
-const LASTFM_BASE = 'https://ws.audioscrobbler.com/2.0/';
+const LASTFM_BASE = "https://ws.audioscrobbler.com/2.0/";
+
+function normalizeArtistName(name) {
+  // Normalize for case + minor punctuation differences (Last.fm may "autocorrect"/format names).
+  return String(name)
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 async function getArtistPlayCount(username, artistName) {
   const { data } = await axios.get(LASTFM_BASE, {
     params: {
-      method: 'artist.getInfo',
+      method: "artist.getInfo",
       artist: artistName,
       username,
       api_key: LASTFM_API_KEY,
-      format: 'json',
+      format: "json",
     },
   });
-  if (data.error) throw new Error(data.message || `Last.fm API error: ${data.error}`);
+  if (data.error) {
+    throw new Error(data.message || `Last.fm API error: ${data.error}`);
+  }
   const artist = data.artist;
-  if (!artist) throw new Error('Artist not found.');
+  if (!artist) {
+    throw new Error("Artist not found.");
+  }
   const userplaycount = artist.stats?.userplaycount;
-  if (userplaycount === undefined) throw new Error('No play count for this user/artist.');
+  if (userplaycount === undefined) {
+    throw new Error("No play count for this user/artist.");
+  }
   return { artistName: artist.name, playCount: parseInt(userplaycount, 10) };
 }
 
 /** Top albums for this user, filtered to the given artist (by name), in play order (from user.getTopAlbums). */
-async function getTopAlbumsByArtist(username, resolvedArtistName, maxAlbums = 3) {
+async function getTopAlbumsByArtist(
+  username,
+  resolvedArtistName,
+  maxAlbums = 3,
+) {
   const { data } = await axios.get(LASTFM_BASE, {
     params: {
-      method: 'user.getTopAlbums',
+      method: "user.getTopAlbums",
       user: username,
-      period: 'overall',
+      period: "overall",
       limit: 1000,
       api_key: LASTFM_API_KEY,
-      format: 'json',
+      format: "json",
     },
   });
-  if (data.error) throw new Error(data.message || `Last.fm API error: ${data.error}`);
+  if (data.error) {
+    throw new Error(data.message || `Last.fm API error: ${data.error}`);
+  }
   let albums = data.topalbums?.album;
-  if (!albums) return [];
-  if (!Array.isArray(albums)) albums = [albums];
+  if (!albums) {
+    return [];
+  }
+  if (!Array.isArray(albums)) {
+    albums = [albums];
+  }
 
   const target = resolvedArtistName.trim().toLowerCase();
   const byArtist = albums.filter((album) => {
     const a = album.artist;
-    const name = typeof a === 'string' ? a : a?.name;
-    return typeof name === 'string' && name.trim().toLowerCase() === target;
+    const name = typeof a === "string" ? a : a?.name;
+    return typeof name === "string" && name.trim().toLowerCase() === target;
   });
 
   return byArtist.slice(0, maxAlbums).map((album) => ({
@@ -71,46 +103,102 @@ async function getTopAlbumsByArtist(username, resolvedArtistName, maxAlbums = 3)
 async function getWeeklyArtistPlayCount(username, artistName) {
   const { data } = await axios.get(LASTFM_BASE, {
     params: {
-      method: 'user.getTopArtists',
+      method: "user.getTopArtists",
       user: username,
-      period: '7day',
-      limit: 300,
+      period: "7day",
+      limit: 400,
       api_key: LASTFM_API_KEY,
-      format: 'json',
+      format: "json",
     },
   });
-  if (data.error) throw new Error(data.message || `Last.fm API error: ${data.error}`);
+  if (data.error) {
+    throw new Error(data.message || `Last.fm API error: ${data.error}`);
+  }
   const artists = data.topartists?.artist;
-  if (!artists || !Array.isArray(artists)) return null;
+  if (!artists || !Array.isArray(artists)) {
+    return null;
+  }
 
   const target = artists.find(
-    (a) => typeof a.name === 'string' && a.name.toLowerCase() === artistName.toLowerCase()
+    (a) =>
+      typeof a.name === "string" &&
+      a.name.toLowerCase() === artistName.toLowerCase(),
   );
-  if (!target) return null;
+  if (!target) {
+    return null;
+  }
 
   const plays = parseInt(target.playcount, 10);
   return Number.isNaN(plays) ? null : plays;
 }
 
+async function getArtistRankInTopArtists(username, resolvedArtistName) {
+  const { data } = await axios.get(LASTFM_BASE, {
+    params: {
+      method: "user.getTopArtists",
+      user: username,
+      period: "overall",
+      limit: 300,
+      api_key: LASTFM_API_KEY,
+      format: "json",
+    },
+  });
+  if (data.error) {
+    throw new Error(
+      data.message || `Last.fm API error: ${data.message || data.error}`,
+    );
+  }
+
+  const topArtists = data.topartists?.artist;
+  if (!topArtists) {
+    return null;
+  }
+
+  const artistsArray = Array.isArray(topArtists) ? topArtists : [topArtists];
+  const targetName = normalizeArtistName(resolvedArtistName);
+
+  const idx = artistsArray.findIndex(
+    (a) => typeof a?.name === "string" && normalizeArtistName(a.name) === targetName
+  );
+  if (idx === -1) {
+    return null;
+  }
+
+  // Prefer the API-provided rank, but if it's missing/unparseable, use array position.
+  const rank = parseInt(artistsArray[idx]?.rank, 10);
+  if (!Number.isNaN(rank)) {
+    return rank;
+  }
+  return idx + 1;
+}
+
 async function getAlbumPlayCount(username, artistName, albumName) {
   const { data } = await axios.get(LASTFM_BASE, {
     params: {
-      method: 'album.getInfo',
+      method: "album.getInfo",
       artist: artistName,
       album: albumName,
       username,
       api_key: LASTFM_API_KEY,
-      format: 'json',
+      format: "json",
     },
   });
-  if (data.error) throw new Error(data.message || `Last.fm API error: ${data.error}`);
+  if (data.error) {
+    throw new Error(data.message || `Last.fm API error: ${data.error}`);
+  }
   const album = data.album;
-  if (!album) throw new Error('Album not found.');
+  if (!album) {
+    throw new Error("Album not found.");
+  }
   const userplaycount = album.userplaycount;
-  if (userplaycount === undefined) throw new Error('No play count for this user/album.');
+  if (userplaycount === undefined) {
+    throw new Error("No play count for this user/album.");
+  }
   const artistField = album.artist;
   const resolvedArtistName =
-    typeof artistField === 'string' ? artistField : artistField?.name || artistName;
+    typeof artistField === "string"
+      ? artistField
+      : artistField?.name || artistName;
   return {
     artistName: resolvedArtistName,
     albumName: album.name,
@@ -119,65 +207,105 @@ async function getAlbumPlayCount(username, artistName, albumName) {
 }
 
 const artistPlaysCommand = new SlashCommandBuilder()
-  .setName('artistplays')
+  .setName("artistplays")
   .setDescription("Look up a Last.fm user's play count for an artist")
   .addStringOption((opt) =>
-    opt.setName('username').setDescription('Last.fm username').setRequired(true)
+    opt
+      .setName("username")
+      .setDescription("Last.fm username")
+      .setRequired(true),
   )
   .addStringOption((opt) =>
-    opt.setName('artist').setDescription('Artist name').setRequired(true)
+    opt.setName("artist").setDescription("Artist name").setRequired(true),
   )
   .toJSON();
 
 const artistPlaysBCommand = new SlashCommandBuilder()
-  .setName('artistplaysb')
-  .setDescription("Artist plays plus up to 3 top albums by that artist (from top 1000 overall)")
-  .addStringOption((opt) =>
-    opt.setName('username').setDescription('Last.fm username').setRequired(true)
+  .setName("artistplaysb")
+  .setDescription(
+    "Artist plays plus up to 3 top albums by that artist (from top 1000 overall)",
   )
   .addStringOption((opt) =>
-    opt.setName('artist').setDescription('Artist name').setRequired(true)
+    opt
+      .setName("username")
+      .setDescription("Last.fm username")
+      .setRequired(true),
+  )
+  .addStringOption((opt) =>
+    opt.setName("artist").setDescription("Artist name").setRequired(true),
   )
   .toJSON();
 
 const albumPlaysCommand = new SlashCommandBuilder()
-  .setName('albumplays')
+  .setName("albumplays")
   .setDescription("Look up a Last.fm user's play count for an album")
   .addStringOption((opt) =>
-    opt.setName('username').setDescription('Last.fm username').setRequired(true)
+    opt
+      .setName("username")
+      .setDescription("Last.fm username")
+      .setRequired(true),
   )
   .addStringOption((opt) =>
-    opt.setName('artist').setDescription('Artist name').setRequired(true)
+    opt.setName("artist").setDescription("Artist name").setRequired(true),
   )
   .addStringOption((opt) =>
-    opt.setName('album').setDescription('Album name').setRequired(true)
+    opt.setName("album").setDescription("Album name").setRequired(true),
   )
   .toJSON();
 
-client.once('ready', async () => {
+const artistPlaysCCommand = new SlashCommandBuilder()
+  .setName("artistplaysc")
+  .setDescription("Look up a Last.fm user’s plays for an artist + their rank")
+  .addStringOption((opt) =>
+    opt
+      .setName("username")
+      .setDescription("Last.fm username")
+      .setRequired(true),
+  )
+  .addStringOption((opt) =>
+    opt.setName("artist").setDescription("Artist name").setRequired(true),
+  )
+  .toJSON();
+
+client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
   const rest = new REST().setToken(DISCORD_TOKEN);
   await rest.put(Routes.applicationCommands(client.user.id), {
-    body: [artistPlaysCommand, artistPlaysBCommand, albumPlaysCommand],
+    body: [
+      artistPlaysCommand,
+      artistPlaysBCommand,
+      artistPlaysCCommand,
+      albumPlaysCommand,
+    ],
   });
-  console.log('Slash commands registered: /artistplays, /artistplaysb, /albumplays');
+  console.log(
+    "Slash commands registered: /artistplays, /artistplaysb, /artistplaysc, /albumplays",
+  );
 });
 
-client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isChatInputCommand()) {
+    return;
+  }
 
   const { commandName } = interaction;
 
   await interaction.deferReply();
 
   try {
-    if (commandName === 'artistplays') {
-      const username = interaction.options.getString('username');
-      const artist = interaction.options.getString('artist');
-      const { artistName, playCount } = await getArtistPlayCount(username, artist);
-      let weeklySuffix = '';
+    if (commandName === "artistplays") {
+      const username = interaction.options.getString("username");
+      const artist = interaction.options.getString("artist");
+      const { artistName, playCount } = await getArtistPlayCount(
+        username,
+        artist,
+      );
+      let weeklySuffix = "";
       try {
-        const weeklyPlays = await getWeeklyArtistPlayCount(username, artistName);
+        const weeklyPlays = await getWeeklyArtistPlayCount(
+          username,
+          artistName,
+        );
         if (weeklyPlays != null) {
           weeklySuffix = ` (+**${weeklyPlays.toLocaleString()}** listens since last week)`;
         }
@@ -185,49 +313,75 @@ client.on('interactionCreate', async (interaction) => {
         // Ignore weekly errors and just send the base message
       }
       const eminemSuffix =
-        artistName.trim().toLowerCase() === 'eminem'
+        artistName.trim().toLowerCase() === "eminem"
           ? " Aren't you a little bit too old to be listening to Eminem?"
-          : '';
+          : "";
       await interaction.editReply(
-        `**${username}** has **${playCount.toLocaleString()}** plays of **${artistName}**.${weeklySuffix}${eminemSuffix}`
+        `**${username}** has **${playCount.toLocaleString()}** plays of **${artistName}**.${weeklySuffix}${eminemSuffix}`,
       );
-    } else if (commandName === 'artistplaysb') {
-      const username = interaction.options.getString('username');
-      const artist = interaction.options.getString('artist');
-      const { artistName, playCount } = await getArtistPlayCount(username, artist);
-      let topAlbumsText = '';
+    } else if (commandName === "artistplaysc") {
+      const username = interaction.options.getString("username");
+      const artist = interaction.options.getString("artist");
+
+      const { artistName, playCount } = await getArtistPlayCount(
+        username,
+        artist,
+      );
+      let rankLine = "";
+
+      try {
+        const rank = await getArtistRankInTopArtists(username, artistName);
+        if (rank != null) {
+          rankLine = `\n**${artistName}** is **${username}**'s #${rank} most played artist/band.`;
+        }
+      } catch {
+        // If rank lookup fails, just return the base plays statement.
+      }
+
+      await interaction.editReply(
+        `**${username}** has **${playCount.toLocaleString()}** plays of **${artistName}**.${rankLine}`,
+      );
+    } else if (commandName === "artistplaysb") {
+      const username = interaction.options.getString("username");
+      const artist = interaction.options.getString("artist");
+      const { artistName, playCount } = await getArtistPlayCount(
+        username,
+        artist,
+      );
+      let topAlbumsText = "";
       try {
         const topAlbums = await getTopAlbumsByArtist(username, artistName, 3);
         if (topAlbums.length > 0) {
           const lines = topAlbums.map(
             (a, i) =>
-              `${i + 1}. **${a.albumName}** with **${a.playCount.toLocaleString()}** plays`
+              `${i + 1}. **${a.albumName}** with **${a.playCount.toLocaleString()}** plays`,
           );
           topAlbumsText = `\n\n**${username}**'s top albums in **${artistName}**:\n${lines.join(
-            '\n'
+            "\n",
           )}`;
         }
       } catch {
         // omit top-albums block on error
       }
       await interaction.editReply(
-        `**${username}** has **${playCount.toLocaleString()}** plays of **${artistName}**.${topAlbumsText}`
+        `**${username}** has **${playCount.toLocaleString()}** plays of **${artistName}**.${topAlbumsText}`,
       );
-    } else if (commandName === 'albumplays') {
-      const username = interaction.options.getString('username');
-      const artist = interaction.options.getString('artist');
-      const album = interaction.options.getString('album');
+    } else if (commandName === "albumplays") {
+      const username = interaction.options.getString("username");
+      const artist = interaction.options.getString("artist");
+      const album = interaction.options.getString("album");
       const { artistName, albumName, playCount } = await getAlbumPlayCount(
         username,
         artist,
-        album
+        album,
       );
       await interaction.editReply(
-        `**${username}** has **${playCount.toLocaleString()}** plays of songs from the album **${albumName}** by **${artistName}**.`
+        `**${username}** has **${playCount.toLocaleString()}** plays of songs from the album **${albumName}** by **${artistName}**.`,
       );
     }
   } catch (err) {
-    const message = err.response?.data?.message || err.message || 'Something went wrong.';
+    const message =
+      err.response?.data?.message || err.message || "Something went wrong.";
     await interaction.editReply(`Couldn't get play count: ${message}`);
   }
 });
